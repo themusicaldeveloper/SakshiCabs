@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title><%= title %> | <%= business.name %></title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js" defer></script>
+  <script src="/js/app.js" defer></script>
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="/"><span class="brand-mark">CR</span><span><%= business.name %><small>Comfortable rides, dependable service</small></span></a>
+    <nav><a href="#fleet">Our fleet</a><a href="#service">Why us</a><a class="button button-small" href="/book">Book a taxi</a></nav>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div class="hero-media"><img src="/images/innova.png" alt="White Toyota Innova available for hire"></div>
+      <div class="hero-overlay"></div>
+      <div class="hero-content">
+        <span class="eyebrow">LOCAL & OUTSTATION TAXI SERVICE</span>
+        <h1><%= business.name %></h1>
+        <p>Clean, spacious cars with clear rates and a driver you can count on.</p>
+        <div class="hero-actions">
+          <a class="button" href="/book">Request a booking <i data-lucide="arrow-right"></i></a>
+          <a class="phone-link" href="tel:<%= business.phone.replace(/\s/g, '') %>"><i data-lucide="phone"></i><%= business.phone %></a>
+        </div>
+      </div>
+    </section>
+
+    <section class="trust-strip" id="service">
+      <div><i data-lucide="badge-check"></i><span><strong>Verified drivers</strong><small>Professional & courteous</small></span></div>
+      <div><i data-lucide="receipt-indian-rupee"></i><span><strong>Clear pricing</strong><small>Know the rate upfront</small></span></div>
+      <div><i data-lucide="sparkles"></i><span><strong>Clean cars</strong><small>Prepared before every trip</small></span></div>
+      <div><i data-lucide="headphones"></i><span><strong>Direct support</strong><small>Speak with us anytime</small></span></div>
+    </section>
+
+    <section class="fleet-section" id="fleet">
+      <div class="section-heading">
+        <div><span class="eyebrow dark">CHOOSE YOUR RIDE</span><h2>Cars for every kind of journey</h2></div>
+        <p>From family airport runs to comfortable outstation travel, choose the space that works for you.</p>
+      </div>
+      <div class="car-grid">
+        <% cars.forEach((car) => { %>
+          <article class="car-card">
+            <a class="car-image" href="/cars/<%= car.slug %>"><img src="<%= car.image_url %>" alt="<%= car.name %>"></a>
+            <div class="car-body">
+              <div class="car-title"><div><span><%= car.category %></span><h3><%= car.name %></h3></div><strong>₹<%= car.rate_per_km %><small>/km</small></strong></div>
+              <p><%= car.description %></p>
+              <div class="specs"><span><i data-lucide="users"></i><%= car.seats %> seats</span><span><i data-lucide="briefcase"></i><%= car.bags %> bags</span><span><i data-lucide="snowflake"></i>AC</span></div>
+              <div class="card-actions"><a class="button" href="/book?car=<%= car.id %>">Book this car</a><a class="text-link" href="/cars/<%= car.slug %>">View details <i data-lucide="arrow-up-right"></i></a></div>
+            </div>
+          </article>
+        <% }) %>
+      </div>
+      <p class="rate-note"><i data-lucide="info"></i>Rates shown are indicative. Tolls, parking, state tax, and driver allowance may apply.</p>
+    </section>
+
+    <section class="cta-band">
+      <div><span class="eyebrow">NEED HELP CHOOSING?</span><h2>Tell us where you’re going.</h2><p>We’ll suggest the right car and confirm availability by phone.</p></div>
+      <a class="button button-light" href="/book">Plan your ride <i data-lucide="calendar-days"></i></a>
+    </section>
+  </main>
+  <footer><strong><%= business.name %></strong><span>Local rides · Airport transfers · Outstation journeys</span><a href="/admin/login">Admin</a></footer>
+</body>
+</html>
