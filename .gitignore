@@ -3,4 +3,6 @@ node_modules/
 npm-debug.log*
 .DS_Store
 data/*.db
+data/*.txt
+data/*.log
 data/*.db-journal

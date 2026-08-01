@@ -13,7 +13,7 @@
       <ol class="steps"><li><strong>Send request</strong><span>Choose a car and enter trip details.</span></li><li><strong>Get a call</strong><span>We confirm availability and fare.</span></li><li><strong>Ride confirmed</strong><span>Pay as agreed and enjoy your journey.</span></li></ol>
     </aside>
     <section class="form-panel">
-      <form method="post" action="/book" class="booking-form">
+      <form method="post" action="/book" class="booking-form" data-availability-form data-manager-phone="<%= business.phone %>" data-manager-tel="<%= business.phone.replace(/\s/g, '') %>">
         <% if (error) { %><div class="alert"><i data-lucide="circle-alert"></i><%= error %></div><% } %>
         <fieldset><legend>Choose a car</legend><div class="car-options">
           <% cars.forEach((car) => { %><label class="car-option"><input type="radio" name="car_id" value="<%= car.id %>" <%= Number(selectedCarId) === car.id ? "checked" : "" %>><img src="<%= car.image_url %>" alt=""><span><strong><%= car.name.replace("Maruti Suzuki ", "").replace("Toyota ", "") %></strong><small><%= car.seats %> seats · ₹<%= car.rate_per_km %>/km</small></span><i data-lucide="check"></i></label><% }) %>
@@ -25,13 +25,14 @@
           <label><span>Pickup time *</span><input type="time" name="pickup_time" required value="<%= values.pickup_time || '' %>"></label>
           <label class="full"><span>Trip type *</span><select name="trip_type" required><option value="one-way">One way</option><option value="round-trip">Round trip</option><option value="local-rental">Local rental</option><option value="airport">Airport transfer</option></select></label>
         </div></fieldset>
+        <div class="availability-message" data-availability-message hidden></div>
         <fieldset><legend>Your details</legend><div class="field-grid">
           <label><span>Full name *</span><input name="customer_name" required value="<%= values.customer_name || '' %>" autocomplete="name" placeholder="Your name"></label>
           <label><span>Phone number *</span><input type="tel" name="phone" required value="<%= values.phone || '' %>" autocomplete="tel" placeholder="+91 98765 43210"></label>
           <label class="full"><span>Email <em>Optional</em></span><input type="email" name="email" value="<%= values.email || '' %>" autocomplete="email" placeholder="you@example.com"></label>
           <label class="full"><span>Anything else? <em>Optional</em></span><textarea name="notes" rows="3" placeholder="Flight number, luggage, child seat, or other request"><%= values.notes || '' %></textarea></label>
         </div></fieldset>
-        <button class="button submit-button" type="submit">Send booking request <i data-lucide="arrow-right"></i></button>
+        <button class="button submit-button" type="submit" data-booking-submit>Send booking request <i data-lucide="arrow-right"></i></button>
         <p class="privacy-note"><i data-lucide="shield-check"></i>Your details are only used to arrange this booking.</p>
       </form>
     </section>

@@ -4,704 +4,401 @@ const crypto = require("crypto");
 
 require("dotenv").config();
 
+const bcrypt = require("bcryptjs");
 const express = require("express");
 const session = require("express-session");
-const Database = require("better-sqlite3");
+const PgSession = require("connect-pg-simple")(session);
+const db = require("./db");
 
 const app = express();
 const port = Number(process.env.PORT || 3000);
 const isProduction = process.env.NODE_ENV === "production";
+const tenantSlug = process.env.TENANT_SLUG || "cityride";
+const availabilityGapHours = Math.max(0, Number(process.env.AVAILABILITY_GAP_HOURS || 6));
 
-/*
-|--------------------------------------------------------------------------
-| Database setup
-|--------------------------------------------------------------------------
-*/
+async function initializeDatabase() {
+  await db.query(fs.readFileSync(path.join(__dirname, "schema.sql"), "utf8"));
 
-const dataDirectory = path.join(__dirname, "data");
-fs.mkdirSync(dataDirectory, { recursive: true });
-
-const databasePath = path.join(dataDirectory, "taxi-booking.db");
-
-const db = new Database(databasePath);
-
-// Simpler journal mode for a temporary Heroku SQLite deployment.
-db.pragma("journal_mode = DELETE");
-db.pragma("foreign_keys = ON");
-
-db.exec(`
-  CREATE TABLE IF NOT EXISTS cars (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    slug TEXT UNIQUE NOT NULL,
-    name TEXT NOT NULL,
-    category TEXT NOT NULL,
-    seats INTEGER NOT NULL,
-    bags INTEGER NOT NULL,
-    rate_per_km INTEGER NOT NULL,
-    day_rate INTEGER NOT NULL,
-    image_url TEXT NOT NULL,
-    description TEXT NOT NULL,
-    is_active INTEGER NOT NULL DEFAULT 1
+  const organizationResult = await db.query(
+    `INSERT INTO organizations (slug, name, phone)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (slug) DO UPDATE SET name = EXCLUDED.name, phone = EXCLUDED.phone
+     RETURNING *`,
+    [tenantSlug, process.env.BUSINESS_NAME || "CityRide Cabs", process.env.BUSINESS_PHONE || "+91 98765 43210"],
   );
+  const organization = organizationResult.rows[0];
 
-  CREATE TABLE IF NOT EXISTS bookings (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    reference TEXT UNIQUE NOT NULL,
-    car_id INTEGER NOT NULL,
-    customer_name TEXT NOT NULL,
-    phone TEXT NOT NULL,
-    email TEXT,
-    pickup_location TEXT NOT NULL,
-    drop_location TEXT NOT NULL,
-    pickup_date TEXT NOT NULL,
-    pickup_time TEXT NOT NULL,
-    trip_type TEXT NOT NULL,
-    notes TEXT,
-    status TEXT NOT NULL DEFAULT 'pending',
-    payment_status TEXT NOT NULL DEFAULT 'unpaid',
-    payment_reference TEXT,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (car_id) REFERENCES cars(id)
+  const adminUsername = process.env.ADMIN_USERNAME || "admin";
+  const existingAdmin = await db.query(
+    "SELECT id FROM users WHERE organization_id = $1 AND username = $2",
+    [organization.id, adminUsername],
   );
-
-  CREATE INDEX IF NOT EXISTS idx_bookings_reference
-  ON bookings(reference);
-
-  CREATE INDEX IF NOT EXISTS idx_bookings_status
-  ON bookings(status);
-
-  CREATE INDEX IF NOT EXISTS idx_bookings_pickup_date
-  ON bookings(pickup_date);
-`);
-
-/*
-|--------------------------------------------------------------------------
-| Business configuration
-|--------------------------------------------------------------------------
-*/
-
-const business = {
-  name: process.env.BUSINESS_NAME || "CityRide Cabs",
-  phone: process.env.BUSINESS_PHONE || "+91 98765 43210",
-};
-
-/*
-|--------------------------------------------------------------------------
-| Seed cars
-|--------------------------------------------------------------------------
-*/
-
-const seedCar = db.prepare(`
-  INSERT OR IGNORE INTO cars
-  (
-    slug,
-    name,
-    category,
-    seats,
-    bags,
-    rate_per_km,
-    day_rate,
-    image_url,
-    description
-  )
-  VALUES
-  (
-    @slug,
-    @name,
-    @category,
-    @seats,
-    @bags,
-    @rate_per_km,
-    @day_rate,
-    @image_url,
-    @description
-  )
-`);
-
-const carsToSeed = [
-  {
-    slug: "ertiga",
-    name: "Maruti Suzuki Ertiga",
-    category: "Comfort MPV",
-    seats: 6,
-    bags: 3,
-    rate_per_km: 16,
-    day_rate: 3200,
-    image_url: "/images/ertiga.png",
-    description:
-      "A comfortable and efficient choice for family trips, airport transfers, and city travel.",
-  },
-  {
-    slug: "innova",
-    name: "Toyota Innova Crysta",
-    category: "Premium MPV",
-    seats: 7,
-    bags: 4,
-    rate_per_km: 22,
-    day_rate: 4500,
-    image_url: "/images/innova.png",
-    description:
-      "Extra space and premium comfort for long journeys, business travel, and larger groups.",
-  },
-];
-
-const seedCarsTransaction = db.transaction((cars) => {
-  for (const car of cars) {
-    seedCar.run(car);
+  if (!existingAdmin.rowCount) {
+    const passwordHash = await bcrypt.hash(process.env.ADMIN_PASSWORD || "admin123", 12);
+    await db.query(
+      `INSERT INTO users (organization_id, role, name, phone, username, password_hash)
+       VALUES ($1, 'super_admin', $2, $3, $4, $5)`,
+      [organization.id, "Business Admin", organization.phone, adminUsername, passwordHash],
+    );
   }
-});
 
-seedCarsTransaction(carsToSeed);
+  const vehicles = [
+    ["ertiga", "Maruti Suzuki Ertiga", "Comfort MPV", 6, 3, 16, 3200, "/images/ertiga.png", "A comfortable and efficient choice for family trips, airport transfers, and city travel."],
+    ["innova", "Toyota Innova Crysta", "Premium MPV", 7, 4, 22, 4500, "/images/innova.png", "Extra space and premium comfort for long journeys, business travel, and larger groups."],
+  ];
+  for (const vehicle of vehicles) {
+    await db.query(
+      `INSERT INTO vehicles (organization_id, slug, name, category, seats, bags, rate_per_km, day_rate, image_url, description)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+       ON CONFLICT (organization_id, slug) DO NOTHING`,
+      [organization.id, ...vehicle],
+    );
+  }
 
-/*
-|--------------------------------------------------------------------------
-| Express configuration
-|--------------------------------------------------------------------------
-*/
+  return organization;
+}
 
 app.set("view engine", "ejs");
 app.set("views", path.join(__dirname, "views"));
-
-if (isProduction) {
-  // Heroku runs behind a reverse proxy.
-  app.set("trust proxy", 1);
-}
-
+if (isProduction) app.set("trust proxy", 1);
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "public")));
 
-/*
-|--------------------------------------------------------------------------
-| Session configuration
-|--------------------------------------------------------------------------
-*/
+const sessionOptions = {
+  secret: process.env.SESSION_SECRET || "local-development-secret-change-this",
+  resave: false,
+  saveUninitialized: false,
+  cookie: { httpOnly: true, sameSite: "lax", secure: isProduction, maxAge: 12 * 60 * 60 * 1000 },
+};
+if (process.env.DB_ADAPTER !== "memory") {
+  sessionOptions.store = new PgSession({ pool: db.pool, createTableIfMissing: true });
+}
+app.use(session(sessionOptions));
 
-const sessionSecret =
-  process.env.SESSION_SECRET || "local-development-secret-change-this";
-
-app.use(
-  session({
-    secret: sessionSecret,
-    resave: false,
-    saveUninitialized: false,
-    cookie: {
-      httpOnly: true,
-      sameSite: "lax",
-      secure: isProduction,
-      maxAge: 8 * 60 * 60 * 1000,
-    },
-  }),
-);
-
-/*
-|--------------------------------------------------------------------------
-| Shared view values
-|--------------------------------------------------------------------------
-*/
-
-app.use((req, res, next) => {
-  res.locals.business = business;
+let defaultOrganization;
+app.use(asyncRoute(async (req, res, next) => {
+  res.locals.business = defaultOrganization;
+  res.locals.currentUser = req.session.user || null;
   res.locals.currentPath = req.path;
-  next();
-});
-
-/*
-|--------------------------------------------------------------------------
-| Helper functions
-|--------------------------------------------------------------------------
-*/
-
-function requireAdmin(req, res, next) {
-  if (req.session.isAdmin) {
-    return next();
+  res.locals.notice = req.session.notice || null;
+  res.locals.unreadNotificationCount = 0;
+  delete req.session.notice;
+  if (req.session.user) {
+    const result = await db.query(
+      "SELECT COUNT(*)::integer AS count FROM notifications WHERE recipient_user_id = $1 AND is_read = FALSE",
+      [req.session.user.id],
+    );
+    res.locals.unreadNotificationCount = result.rows[0].count;
   }
+  next();
+}));
 
+function asyncRoute(handler) {
+  return (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
+}
+
+function requireUser(req, res, next) {
+  if (req.session.user) return next();
   return res.redirect("/admin/login");
 }
 
+function requireSuperAdmin(req, res, next) {
+  if (req.session.user?.role === "super_admin") return next();
+  return res.status(403).render("message", { title: "Access denied", message: "Only a super admin can manage this section." });
+}
+
+function canManageBooking(user, booking) {
+  return user.role === "super_admin" || Number(booking.driver_id) === Number(user.id);
+}
+
 function createReference() {
-  const year = new Date().getFullYear();
-  const randomCode = crypto.randomBytes(4).toString("hex").toUpperCase();
-
-  return `CR-${year}-${randomCode}`;
+  return `CR-${new Date().getFullYear()}-${crypto.randomBytes(4).toString("hex").toUpperCase()}`;
 }
 
-function createUniqueReference() {
-  let reference;
-  let exists;
-
-  do {
-    reference = createReference();
-
-    exists = db
-      .prepare("SELECT id FROM bookings WHERE reference = ?")
-      .get(reference);
-  } while (exists);
-
-  return reference;
+function datePart(value) {
+  return value instanceof Date ? value.toISOString().slice(0, 10) : String(value).slice(0, 10);
 }
 
-/*
-|--------------------------------------------------------------------------
-| Public routes
-|--------------------------------------------------------------------------
-*/
+function pickupTimestamp(date, time) {
+  return new Date(`${datePart(date)}T${String(time).slice(0, 8)}`).getTime();
+}
 
-app.get("/", (req, res) => {
-  const cars = db
-    .prepare(
-      `
-        SELECT *
-        FROM cars
-        WHERE is_active = 1
-        ORDER BY id
-      `,
-    )
-    .all();
+async function checkVehicleAvailability(organizationId, vehicleId, pickupDate, pickupTime) {
+  const requestedAt = pickupTimestamp(pickupDate, pickupTime);
+  if (!Number.isFinite(requestedAt)) return { available: false, invalid: true };
 
-  return res.render("home", {
-    cars,
-    title: "Reliable taxis for every journey",
-  });
-});
-
-app.get("/cars/:slug", (req, res) => {
-  const car = db
-    .prepare(
-      `
-        SELECT *
-        FROM cars
-        WHERE slug = ?
-          AND is_active = 1
-      `,
-    )
-    .get(req.params.slug);
-
-  if (!car) {
-    return res.status(404).render("message", {
-      title: "Car not found",
-      message: "This car is not currently available.",
-    });
-  }
-
-  return res.render("car", {
-    car,
-    title: car.name,
-  });
-});
-
-app.get("/book", (req, res) => {
-  const cars = db
-    .prepare(
-      `
-        SELECT *
-        FROM cars
-        WHERE is_active = 1
-        ORDER BY id
-      `,
-    )
-    .all();
-
-  const requestedCarId = Number(req.query.car);
-  const selectedCarExists = cars.some((car) => car.id === requestedCarId);
-
-  const selectedCarId = selectedCarExists
-    ? requestedCarId
-    : cars[0]?.id || null;
-
-  return res.render("book", {
-    cars,
-    selectedCarId,
-    error: null,
-    values: {},
-    title: "Request a booking",
-  });
-});
-
-app.post("/book", (req, res) => {
-  const values = req.body;
-
-  const cars = db
-    .prepare(
-      `
-        SELECT *
-        FROM cars
-        WHERE is_active = 1
-        ORDER BY id
-      `,
-    )
-    .all();
-
-  const selectedCarId = Number(values.car_id);
-
-  const car = cars.find((item) => item.id === selectedCarId);
-
-  const requiredFields = [
-    "customer_name",
-    "phone",
-    "pickup_location",
-    "drop_location",
-    "pickup_date",
-    "pickup_time",
-    "trip_type",
-  ];
-
-  const hasMissingFields = requiredFields.some(
-    (key) => !String(values[key] || "").trim(),
+  const { rows } = await db.query(
+    `SELECT id, pickup_date, pickup_time FROM bookings
+     WHERE organization_id = $1 AND vehicle_id = $2 AND status <> 'cancelled'`,
+    [organizationId, vehicleId],
   );
+  const gapMilliseconds = availabilityGapHours * 60 * 60 * 1000;
+  const conflict = rows.find((booking) => Math.abs(pickupTimestamp(booking.pickup_date, booking.pickup_time) - requestedAt) < gapMilliseconds);
+  return { available: !conflict, conflict: conflict || null, gapHours: availabilityGapHours };
+}
 
-  if (!car || hasMissingFields) {
-    return res.status(400).render("book", {
+async function notifyUsers(client, organizationId, userIds, bookingId, type, title, message) {
+  for (const userId of userIds) {
+    await client.query(
+      `INSERT INTO notifications (organization_id, recipient_user_id, booking_id, type, title, message)
+       VALUES ($1,$2,$3,$4,$5,$6)`,
+      [organizationId, userId, bookingId, type, title, message],
+    );
+  }
+}
+
+app.get("/", asyncRoute(async (req, res) => {
+  const { rows: cars } = await db.query("SELECT * FROM vehicles WHERE organization_id = $1 AND is_active = TRUE ORDER BY id", [defaultOrganization.id]);
+  res.render("home", { cars, title: "Reliable taxis for every journey" });
+}));
+
+app.get("/cars/:slug", asyncRoute(async (req, res) => {
+  const { rows } = await db.query("SELECT * FROM vehicles WHERE organization_id = $1 AND slug = $2 AND is_active = TRUE", [defaultOrganization.id, req.params.slug]);
+  if (!rows[0]) return res.status(404).render("message", { title: "Car not found", message: "This car is not currently available." });
+  return res.render("car", { car: rows[0], title: rows[0].name });
+}));
+
+app.get("/book", asyncRoute(async (req, res) => {
+  const { rows: cars } = await db.query("SELECT * FROM vehicles WHERE organization_id = $1 AND is_active = TRUE ORDER BY id", [defaultOrganization.id]);
+  res.render("book", { cars, selectedCarId: Number(req.query.car || cars[0]?.id), error: null, values: {}, title: "Request a booking" });
+}));
+
+app.get("/api/availability", asyncRoute(async (req, res) => {
+  const vehicleId = Number(req.query.vehicle_id);
+  const { rows } = await db.query(
+    "SELECT id FROM vehicles WHERE id = $1 AND organization_id = $2 AND is_active = TRUE",
+    [vehicleId, defaultOrganization.id],
+  );
+  if (!rows[0] || !req.query.pickup_date || !req.query.pickup_time) {
+    return res.status(400).json({ available: false, message: "Choose a valid vehicle, date, and time." });
+  }
+  const availability = await checkVehicleAvailability(defaultOrganization.id, vehicleId, req.query.pickup_date, req.query.pickup_time);
+  res.json({
+    available: availability.available,
+    gapHours: availabilityGapHours,
+    message: availability.available
+      ? "This vehicle is available for the selected time."
+      : `This vehicle has another trip within ${availabilityGapHours} hours. Please confirm availability with the manager before booking.`,
+  });
+}));
+
+app.post("/book", asyncRoute(async (req, res) => {
+  const values = req.body;
+  const { rows: cars } = await db.query("SELECT * FROM vehicles WHERE organization_id = $1 AND is_active = TRUE ORDER BY id", [defaultOrganization.id]);
+  const car = cars.find((item) => Number(item.id) === Number(values.car_id));
+  const required = ["customer_name", "phone", "pickup_location", "drop_location", "pickup_date", "pickup_time", "trip_type"];
+  if (!car || required.some((key) => !String(values[key] || "").trim())) {
+    return res.status(400).render("book", { cars, selectedCarId: Number(values.car_id), values, error: "Please complete all required fields.", title: "Request a booking" });
+  }
+  const availability = await checkVehicleAvailability(defaultOrganization.id, car.id, values.pickup_date, values.pickup_time);
+  if (!availability.available) {
+    return res.status(409).render("book", {
       cars,
-      selectedCarId,
+      selectedCarId: Number(values.car_id),
       values,
-      error: "Please complete all required fields.",
+      error: `This vehicle has another trip within ${availabilityGapHours} hours. Please call the manager to confirm before booking.`,
       title: "Request a booking",
     });
   }
-
-  const reference = createUniqueReference();
-
-  const insertBooking = db.prepare(`
-    INSERT INTO bookings
-    (
-      reference,
-      car_id,
-      customer_name,
-      phone,
-      email,
-      pickup_location,
-      drop_location,
-      pickup_date,
-      pickup_time,
-      trip_type,
-      notes
-    )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `);
-
-  insertBooking.run(
-    reference,
-    car.id,
-    String(values.customer_name).trim(),
-    String(values.phone).trim(),
-    String(values.email || "").trim(),
-    String(values.pickup_location).trim(),
-    String(values.drop_location).trim(),
-    String(values.pickup_date).trim(),
-    String(values.pickup_time).trim(),
-    String(values.trip_type).trim(),
-    String(values.notes || "").trim(),
-  );
-
-  return res.redirect(
-    `/booking/success?reference=${encodeURIComponent(reference)}`,
-  );
-});
-
-app.get("/booking/success", (req, res) => {
-  const reference = String(req.query.reference || "").trim();
-
-  const booking = db
-    .prepare(
-      `
-        SELECT
-          bookings.*,
-          cars.name AS car_name
-        FROM bookings
-        INNER JOIN cars
-          ON cars.id = bookings.car_id
-        WHERE bookings.reference = ?
-      `,
-    )
-    .get(reference);
-
-  if (!booking) {
-    return res.redirect("/");
+  const reference = createReference();
+  const client = await db.pool.connect();
+  try {
+    await client.query("BEGIN");
+    const bookingResult = await client.query(
+      `INSERT INTO bookings (organization_id, reference, vehicle_id, customer_name, phone, email, pickup_location, drop_location, pickup_date, pickup_time, trip_type, notes)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
+      [defaultOrganization.id, reference, car.id, values.customer_name.trim(), values.phone.trim(), String(values.email || "").trim(), values.pickup_location.trim(), values.drop_location.trim(), values.pickup_date, values.pickup_time, values.trip_type, String(values.notes || "").trim()],
+    );
+    const adminResult = await client.query(
+      "SELECT id FROM users WHERE organization_id = $1 AND role = 'super_admin' AND is_active = TRUE",
+      [defaultOrganization.id],
+    );
+    await notifyUsers(client, defaultOrganization.id, adminResult.rows.map((admin) => admin.id), bookingResult.rows[0].id, "new_booking", "New booking request", `${values.customer_name.trim()} requested ${car.name} for ${values.pickup_date} at ${values.pickup_time}.`);
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
   }
+  res.redirect(`/booking/success?reference=${encodeURIComponent(reference)}`);
+}));
 
-  return res.render("success", {
-    booking,
-    title: "Booking request received",
-  });
-});
-
-/*
-|--------------------------------------------------------------------------
-| Admin authentication
-|--------------------------------------------------------------------------
-*/
+app.get("/booking/success", asyncRoute(async (req, res) => {
+  const { rows } = await db.query(
+    `SELECT b.*, v.name AS car_name FROM bookings b JOIN vehicles v ON v.id = b.vehicle_id
+     WHERE b.organization_id = $1 AND b.reference = $2`,
+    [defaultOrganization.id, req.query.reference],
+  );
+  if (!rows[0]) return res.redirect("/");
+  res.render("success", { booking: rows[0], title: "Booking request received" });
+}));
 
 app.get("/admin/login", (req, res) => {
-  if (req.session.isAdmin) {
-    return res.redirect("/admin");
+  if (req.session.user) return res.redirect("/admin");
+  res.render("login", { error: null, title: "Team sign in" });
+});
+
+app.post("/admin/login", asyncRoute(async (req, res) => {
+  const { rows } = await db.query(
+    `SELECT u.*, o.name AS organization_name FROM users u JOIN organizations o ON o.id = u.organization_id
+     WHERE o.slug = $1 AND LOWER(u.username) = LOWER($2) AND u.is_active = TRUE`,
+    [tenantSlug, String(req.body.username || "").trim()],
+  );
+  const user = rows[0];
+  if (!user || !(await bcrypt.compare(String(req.body.password || ""), user.password_hash))) {
+    return res.status(401).render("login", { error: "Incorrect username or password.", title: "Team sign in" });
   }
+  req.session.user = { id: user.id, organizationId: user.organization_id, name: user.name, role: user.role, organizationName: user.organization_name };
+  res.redirect("/admin");
+}));
 
-  return res.render("login", {
-    error: null,
-    title: "Admin sign in",
-  });
-});
+app.post("/admin/logout", requireUser, (req, res) => req.session.destroy(() => res.redirect("/admin/login")));
 
-app.post("/admin/login", (req, res) => {
-  const expectedPassword = process.env.ADMIN_PASSWORD || "admin123";
-  const enteredPassword = String(req.body.password || "");
+app.get("/admin", requireUser, asyncRoute(async (req, res) => {
+  const user = req.session.user;
+  const allowed = ["all", "pending", "confirmed", "completed", "cancelled"];
+  const filter = allowed.includes(req.query.status) ? req.query.status : "all";
+  const params = [user.organizationId];
+  const conditions = ["b.organization_id = $1"];
+  if (user.role === "driver") { params.push(user.id); conditions.push(`b.driver_id = $${params.length}`); }
+  if (filter !== "all") { params.push(filter); conditions.push(`b.status = $${params.length}`); }
+  const { rows: bookings } = await db.query(
+    `SELECT b.*, v.name AS car_name, v.registration_number, u.name AS driver_name
+     FROM bookings b JOIN vehicles v ON v.id = b.vehicle_id LEFT JOIN users u ON u.id = b.driver_id
+     WHERE ${conditions.join(" AND ")} ORDER BY b.pickup_date ASC, b.pickup_time ASC`, params,
+  );
+  const countParams = [user.organizationId];
+  let countWhere = "organization_id = $1";
+  if (user.role === "driver") { countParams.push(user.id); countWhere += " AND driver_id = $2"; }
+  const { rows: counts } = await db.query(`SELECT status, COUNT(*)::integer AS count FROM bookings WHERE ${countWhere} GROUP BY status`, countParams);
+  const { rows: drivers } = user.role === "super_admin" ? await db.query("SELECT id, name FROM users WHERE organization_id = $1 AND role = 'driver' AND is_active = TRUE ORDER BY name", [user.organizationId]) : { rows: [] };
+  res.render("admin", { bookings, counts, drivers, filter, title: user.role === "driver" ? "My trips" : "Booking dashboard" });
+}));
 
-  if (enteredPassword !== expectedPassword) {
-    return res.status(401).render("login", {
-      error: "Incorrect password.",
-      title: "Admin sign in",
-    });
+app.post("/admin/bookings/:id/status", requireUser, asyncRoute(async (req, res) => {
+  const allowed = ["pending", "confirmed", "completed", "cancelled"];
+  const { rows } = await db.query("SELECT * FROM bookings WHERE id = $1 AND organization_id = $2", [req.params.id, req.session.user.organizationId]);
+  if (rows[0] && canManageBooking(req.session.user, rows[0]) && allowed.includes(req.body.status)) {
+    await db.query("UPDATE bookings SET status = $1 WHERE id = $2", [req.body.status, rows[0].id]);
   }
+  res.redirect(`/admin?status=${encodeURIComponent(req.body.return_status || "all")}`);
+}));
 
-  req.session.isAdmin = true;
-
-  return req.session.save(() => {
-    res.redirect("/admin");
-  });
-});
-
-app.post("/admin/logout", requireAdmin, (req, res) => {
-  req.session.destroy((error) => {
-    if (error) {
-      console.error("Unable to destroy session:", error);
-    }
-
-    res.clearCookie("connect.sid");
-    res.redirect("/admin/login");
-  });
-});
-
-/*
-|--------------------------------------------------------------------------
-| Admin dashboard
-|--------------------------------------------------------------------------
-*/
-
-app.get("/admin", requireAdmin, (req, res) => {
-  const allowedFilters = [
-    "all",
-    "pending",
-    "confirmed",
-    "completed",
-    "cancelled",
-  ];
-
-  const requestedFilter = String(req.query.status || "all");
-
-  const filter = allowedFilters.includes(requestedFilter)
-    ? requestedFilter
-    : "all";
-
-  const bookings =
-    filter === "all"
-      ? db
-          .prepare(
-            `
-              SELECT
-                bookings.*,
-                cars.name AS car_name
-              FROM bookings
-              INNER JOIN cars
-                ON cars.id = bookings.car_id
-              ORDER BY
-                pickup_date ASC,
-                pickup_time ASC,
-                bookings.id ASC
-            `,
-          )
-          .all()
-      : db
-          .prepare(
-            `
-              SELECT
-                bookings.*,
-                cars.name AS car_name
-              FROM bookings
-              INNER JOIN cars
-                ON cars.id = bookings.car_id
-              WHERE bookings.status = ?
-              ORDER BY
-                pickup_date ASC,
-                pickup_time ASC,
-                bookings.id ASC
-            `,
-          )
-          .all(filter);
-
-  const counts = db
-    .prepare(
-      `
-        SELECT
-          status,
-          COUNT(*) AS count
-        FROM bookings
-        GROUP BY status
-      `,
-    )
-    .all();
-
-  return res.render("admin", {
-    bookings,
-    counts,
-    filter,
-    title: "Booking dashboard",
-  });
-});
-
-app.post("/admin/bookings/:id/status", requireAdmin, (req, res) => {
-  const allowedStatuses = [
-    "pending",
-    "confirmed",
-    "completed",
-    "cancelled",
-  ];
-
-  const bookingId = Number(req.params.id);
-  const newStatus = String(req.body.status || "");
-
-  if (Number.isInteger(bookingId) && allowedStatuses.includes(newStatus)) {
-    db.prepare(
-      `
-        UPDATE bookings
-        SET status = ?
-        WHERE id = ?
-      `,
-    ).run(newStatus, bookingId);
+app.post("/admin/bookings/:id/assign", requireUser, requireSuperAdmin, asyncRoute(async (req, res) => {
+  const driverId = req.body.driver_id ? Number(req.body.driver_id) : null;
+  if (driverId) {
+    const driver = await db.query("SELECT id FROM users WHERE id = $1 AND organization_id = $2 AND role = 'driver' AND is_active = TRUE", [driverId, req.session.user.organizationId]);
+    if (!driver.rowCount) return res.status(400).send("Invalid driver");
   }
-
-  const returnStatus = String(req.body.return_status || "");
-
-  if (allowedStatuses.includes(returnStatus)) {
-    return res.redirect(
-      `/admin?status=${encodeURIComponent(returnStatus)}`,
-    );
+  const previousResult = await db.query(
+    "SELECT driver_id FROM bookings WHERE id = $1 AND organization_id = $2",
+    [req.params.id, req.session.user.organizationId],
+  );
+  const bookingResult = await db.query(
+    `UPDATE bookings SET driver_id = $1 WHERE id = $2 AND organization_id = $3
+     RETURNING id, reference, pickup_date, pickup_time, pickup_location, drop_location, driver_id`,
+    [driverId, req.params.id, req.session.user.organizationId],
+  );
+  const booking = bookingResult.rows[0];
+  if (booking && driverId && Number(previousResult.rows[0]?.driver_id) !== driverId) {
+    await notifyUsers(db, req.session.user.organizationId, [driverId], booking.id, "trip_assigned", "New trip assigned", `${booking.reference}: ${booking.pickup_location} to ${booking.drop_location} on ${datePart(booking.pickup_date)} at ${String(booking.pickup_time).slice(0, 5)}.`);
   }
+  res.redirect("/admin");
+}));
 
-  return res.redirect("/admin");
-});
+app.get("/admin/notifications", requireUser, asyncRoute(async (req, res) => {
+  const { rows: notifications } = await db.query(
+    `SELECT * FROM notifications WHERE recipient_user_id = $1
+     ORDER BY is_read ASC, created_at DESC LIMIT 100`,
+    [req.session.user.id],
+  );
+  res.render("notifications", { notifications, title: "Notifications" });
+}));
 
-app.post("/admin/bookings/:id/payment", requireAdmin, (req, res) => {
-  const bookingId = Number(req.params.id);
+app.post("/admin/notifications/read-all", requireUser, asyncRoute(async (req, res) => {
+  await db.query("UPDATE notifications SET is_read = TRUE WHERE recipient_user_id = $1", [req.session.user.id]);
+  res.redirect("/admin/notifications");
+}));
 
-  if (!Number.isInteger(bookingId)) {
-    return res.redirect("/admin");
+app.post("/admin/notifications/:id/read", requireUser, asyncRoute(async (req, res) => {
+  await db.query("UPDATE notifications SET is_read = TRUE WHERE id = $1 AND recipient_user_id = $2", [req.params.id, req.session.user.id]);
+  res.redirect("/admin");
+}));
+
+app.post("/admin/bookings/:id/payment", requireUser, requireSuperAdmin, asyncRoute(async (req, res) => {
+  await db.query(
+    "UPDATE bookings SET payment_status = $1, payment_reference = $2 WHERE id = $3 AND organization_id = $4",
+    [req.body.payment_status === "paid" ? "paid" : "unpaid", String(req.body.payment_reference || "").trim(), req.params.id, req.session.user.organizationId],
+  );
+  res.redirect("/admin");
+}));
+
+app.get("/admin/drivers", requireUser, requireSuperAdmin, asyncRoute(async (req, res) => {
+  const { rows: drivers } = await db.query(
+    `SELECT u.id, u.name, u.phone, u.username, u.is_active, COUNT(b.id)::integer AS booking_count
+     FROM users u LEFT JOIN bookings b ON b.driver_id = u.id
+     WHERE u.organization_id = $1 AND u.role = 'driver'
+     GROUP BY u.id, u.name, u.phone, u.username, u.is_active
+     ORDER BY u.name`, [req.session.user.organizationId],
+  );
+  res.render("drivers", { drivers, error: null, title: "Drivers" });
+}));
+
+app.post("/admin/drivers", requireUser, requireSuperAdmin, asyncRoute(async (req, res) => {
+  const values = req.body;
+  if (!["name", "phone", "username", "password"].every((key) => String(values[key] || "").trim())) {
+    req.session.notice = "Complete all driver fields."; return res.redirect("/admin/drivers");
   }
-
-  const paymentStatus =
-    req.body.payment_status === "paid" ? "paid" : "unpaid";
-
-  const paymentReference = String(
-    req.body.payment_reference || "",
-  ).trim();
-
-  db.prepare(
-    `
-      UPDATE bookings
-      SET
-        payment_status = ?,
-        payment_reference = ?
-      WHERE id = ?
-    `,
-  ).run(paymentStatus, paymentReference, bookingId);
-
-  return res.redirect("/admin");
-});
-
-/*
-|--------------------------------------------------------------------------
-| Health-check route
-|--------------------------------------------------------------------------
-*/
-
-app.get("/health", (req, res) => {
   try {
-    db.prepare("SELECT 1").get();
-
-    return res.status(200).json({
-      status: "ok",
-      application: business.name,
-      database: "connected",
-    });
+    await db.query(
+      `INSERT INTO users (organization_id, role, name, phone, username, password_hash)
+       VALUES ($1, 'driver', $2, $3, $4, $5)`,
+      [req.session.user.organizationId, values.name.trim(), values.phone.trim(), values.username.trim().toLowerCase(), await bcrypt.hash(values.password, 12)],
+    );
+    req.session.notice = "Driver account created.";
   } catch (error) {
-    console.error("Health check failed:", error);
-
-    return res.status(500).json({
-      status: "error",
-      database: "unavailable",
-    });
+    req.session.notice = error.code === "23505" ? "That username is already in use." : "Could not create driver.";
   }
-});
+  res.redirect("/admin/drivers");
+}));
 
-/*
-|--------------------------------------------------------------------------
-| 404 handler
-|--------------------------------------------------------------------------
-*/
+app.post("/admin/drivers/:id/toggle", requireUser, requireSuperAdmin, asyncRoute(async (req, res) => {
+  await db.query("UPDATE users SET is_active = NOT is_active WHERE id = $1 AND organization_id = $2 AND role = 'driver'", [req.params.id, req.session.user.organizationId]);
+  res.redirect("/admin/drivers");
+}));
 
-app.use((req, res) => {
-  return res.status(404).render("message", {
-    title: "Page not found",
-    message: "The page you requested does not exist.",
-  });
-});
+app.get("/admin/vehicles", requireUser, requireSuperAdmin, asyncRoute(async (req, res) => {
+  const { rows: vehicles } = await db.query("SELECT * FROM vehicles WHERE organization_id = $1 ORDER BY id", [req.session.user.organizationId]);
+  res.render("vehicles", { vehicles, title: "Vehicles" });
+}));
 
-/*
-|--------------------------------------------------------------------------
-| Error handler
-|--------------------------------------------------------------------------
-*/
+app.post("/admin/vehicles", requireUser, requireSuperAdmin, asyncRoute(async (req, res) => {
+  const v = req.body;
+  const slug = String(v.name || "vehicle").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") + `-${Date.now().toString().slice(-5)}`;
+  await db.query(
+    `INSERT INTO vehicles (organization_id, slug, name, registration_number, category, seats, bags, rate_per_km, day_rate, image_url, description)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+    [req.session.user.organizationId, slug, v.name.trim(), String(v.registration_number || "").trim(), v.category.trim(), Number(v.seats), Number(v.bags || 0), Number(v.rate_per_km), Number(v.day_rate), String(v.image_url || "/images/ertiga.png").trim(), String(v.description || "Comfortable taxi available for hire.").trim()],
+  );
+  res.redirect("/admin/vehicles");
+}));
 
-app.use((error, req, res, next) => {
-  console.error("Unhandled application error:", error);
+app.post("/admin/vehicles/:id/toggle", requireUser, requireSuperAdmin, asyncRoute(async (req, res) => {
+  await db.query("UPDATE vehicles SET is_active = NOT is_active WHERE id = $1 AND organization_id = $2", [req.params.id, req.session.user.organizationId]);
+  res.redirect("/admin/vehicles");
+}));
 
-  if (res.headersSent) {
-    return next(error);
-  }
+app.get("/health", asyncRoute(async (req, res) => { await db.query("SELECT 1"); res.json({ status: "ok", database: "postgresql" }); }));
+app.use((req, res) => res.status(404).render("message", { title: "Page not found", message: "The page you requested does not exist." }));
+app.use((error, req, res, next) => { console.error(error); res.status(500).render("message", { title: "Something went wrong", message: "Please try again shortly." }); });
 
-  return res.status(500).render("message", {
-    title: "Something went wrong",
-    message: "The application encountered an unexpected error.",
-  });
-});
-
-/*
-|--------------------------------------------------------------------------
-| Start server
-|--------------------------------------------------------------------------
-*/
-
-const server = app.listen(port, "0.0.0.0", () => {
-  console.log(`${business.name} running on port ${port}`);
-  console.log(`Database path: ${databasePath}`);
-});
-
-/*
-|--------------------------------------------------------------------------
-| Graceful shutdown
-|--------------------------------------------------------------------------
-*/
-
-function shutdown(signal) {
-  console.log(`${signal} received. Closing application.`);
-
-  server.close(() => {
-    try {
-      db.close();
-      console.log("Database connection closed.");
-    } catch (error) {
-      console.error("Error closing database:", error);
-    }
-
-    process.exit(0);
-  });
-
-  setTimeout(() => {
-    console.error("Forced shutdown after timeout.");
-    process.exit(1);
-  }, 10000).unref();
+async function start() {
+  defaultOrganization = await initializeDatabase();
+  app.listen(port, () => console.log(`${defaultOrganization.name} running at http://localhost:${port}`));
 }
 
-process.on("SIGTERM", () => shutdown("SIGTERM"));
-process.on("SIGINT", () => shutdown("SIGINT"));
+if (require.main === module) start().catch((error) => { console.error("Application failed to start:", error); process.exit(1); });
+
+module.exports = { app, initializeDatabase, start };
