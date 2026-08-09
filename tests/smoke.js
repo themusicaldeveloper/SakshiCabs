@@ -39,7 +39,7 @@ async function run() {
   });
   const dashboard = await request("/admin", {}, login.cookie);
   if (!dashboard.text.includes("Smoke Customer")) throw new Error("Admin booking view failed");
-  const bookingId = dashboard.text.match(/\/admin\/bookings\/(\d+)\/status/)?.[1];
+  const bookingId = dashboard.text.match(/\/admin\/bookings\/(\d+)\/update/)?.[1];
   const adminNotifications = await request("/admin/notifications", {}, login.cookie);
   if (!adminNotifications.text.includes("New booking request")) throw new Error("Admin notification failed");
 
@@ -63,11 +63,13 @@ async function run() {
   const vehicles = await request("/admin/vehicles", {}, login.cookie);
   if (!vehicles.text.includes("Test Sedan")) throw new Error("Vehicle list failed");
 
-  await request(`/admin/bookings/${bookingId}/assign`, {
+  await request(`/admin/bookings/${bookingId}/update`, {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({ driver_id: driverId }),
+    body: new URLSearchParams({ driver_id: driverId, status: "pending", payment_status: "paid", payment_reference: "UPI-SMOKE", return_status: "all" }),
   }, login.cookie);
+  const combinedUpdate = await request("/admin", {}, login.cookie);
+  if (!combinedUpdate.text.includes("paid-dot") || !combinedUpdate.text.includes("UPI-SMOKE")) throw new Error("Combined booking update failed");
 
   const driverLogin = await request("/admin/login", {
     method: "POST",
@@ -81,7 +83,57 @@ async function run() {
   const forbidden = await request("/admin/vehicles", {}, driverLogin.cookie);
   if (forbidden.response.status !== 403) throw new Error("Driver role restriction failed");
 
-  console.log("Smoke test passed: availability, booking, notifications, assignment, and role access.");
+  await request(`/admin/bookings/${bookingId}/update`, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ driver_id: driverId, status: "confirmed", payment_status: "paid", payment_reference: "UPI-SMOKE", return_status: "all" }),
+  }, login.cookie);
+  const bookedAvailability = await request("/api/availability?vehicle_id=1&pickup_date=2026-08-10&pickup_time=13%3A00");
+  if (!bookedAvailability.text.includes('"state":"booked"') || !bookedAvailability.text.includes("Already booked")) throw new Error("Confirmed availability message failed");
+  if (!bookedAvailability.text.includes("Toyota Innova")) throw new Error("Available alternative was not suggested");
+
+  const managerReviewBooking = await request("/book", {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ car_id: "1", manager_review: "1", customer_name: "Arrangement Customer", phone: "9666666666", pickup_location: "Hotel", drop_location: "Office", pickup_date: "2026-08-10", pickup_time: "13:00", trip_type: "one-way" }),
+  });
+  if (managerReviewBooking.response.status !== 302) throw new Error("Manager review booking was not accepted");
+  const conflictDashboard = await request("/admin", {}, login.cookie);
+  if (!conflictDashboard.text.includes("Scheduling conflict")) throw new Error("Admin conflict flag failed");
+  const conflictNotifications = await request("/admin/notifications", {}, login.cookie);
+  if (!conflictNotifications.text.includes("Vehicle conflict needs arrangement")) throw new Error("Admin conflict notification failed");
+  const bookingIds = [...conflictDashboard.text.matchAll(/\/admin\/bookings\/(\d+)\/update/g)].map((match) => match[1]);
+  const conflictBookingId = bookingIds.find((id) => id !== bookingId);
+  await request(`/admin/bookings/${conflictBookingId}/update`, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ vehicle_id: "2", status: "pending", payment_status: "unpaid", return_status: "all" }),
+  }, login.cookie);
+  const resolvedDashboard = await request("/admin", {}, login.cookie);
+  if (resolvedDashboard.text.includes("Scheduling conflict")) throw new Error("Alternative vehicle did not resolve conflict");
+
+  const tracking = await request("/booking/manage?reference=CR", {}, "");
+  if (tracking.response.status !== 200) throw new Error("Booking tracking page failed");
+  const reference = dashboard.text.match(/CR-\d{4}-[A-F0-9]+/)?.[0];
+  const cancellation = await request(`/booking/${reference}/cancel-request`, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ phone: "9999999999", reason: "Plans changed" }),
+  });
+  if (cancellation.response.status !== 302) throw new Error("Cancellation request failed");
+  const cancellationDashboard = await request("/admin", {}, login.cookie);
+  if (!cancellationDashboard.text.includes("Cancellation requested")) throw new Error("Admin cancellation view failed");
+  const cancellationNotifications = await request("/admin/notifications", {}, login.cookie);
+  if (!cancellationNotifications.text.includes("Cancellation requested")) throw new Error("Cancellation notification failed");
+  await request(`/admin/bookings/${bookingId}/cancellation`, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ resolution: "approved" }),
+  }, login.cookie);
+  const reopenedAvailability = await request("/api/availability?vehicle_id=1&pickup_date=2026-08-10&pickup_time=13%3A00");
+  if (!reopenedAvailability.text.includes('"available":true')) throw new Error("Cancellation did not reopen availability");
+
+  console.log("Smoke test passed: conflict review, alternatives, notifications, combined updates, cancellation, and roles.");
   process.exit(0);
 }
 

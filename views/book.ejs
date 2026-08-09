@@ -14,6 +14,7 @@
     </aside>
     <section class="form-panel">
       <form method="post" action="/book" class="booking-form" data-availability-form data-manager-phone="<%= business.phone %>" data-manager-tel="<%= business.phone.replace(/\s/g, '') %>">
+        <input type="hidden" name="manager_review" value="<%= managerReviewRequired ? '1' : '0' %>" data-manager-review>
         <% if (error) { %><div class="alert"><i data-lucide="circle-alert"></i><%= error %></div><% } %>
         <fieldset><legend>Choose a car</legend><div class="car-options">
           <% cars.forEach((car) => { %><label class="car-option"><input type="radio" name="car_id" value="<%= car.id %>" <%= Number(selectedCarId) === car.id ? "checked" : "" %>><img src="<%= car.image_url %>" alt=""><span><strong><%= car.name.replace("Maruti Suzuki ", "").replace("Toyota ", "") %></strong><small><%= car.seats %> seats · ₹<%= car.rate_per_km %>/km</small></span><i data-lucide="check"></i></label><% }) %>
@@ -32,7 +33,7 @@
           <label class="full"><span>Email <em>Optional</em></span><input type="email" name="email" value="<%= values.email || '' %>" autocomplete="email" placeholder="you@example.com"></label>
           <label class="full"><span>Anything else? <em>Optional</em></span><textarea name="notes" rows="3" placeholder="Flight number, luggage, child seat, or other request"><%= values.notes || '' %></textarea></label>
         </div></fieldset>
-        <button class="button submit-button" type="submit" data-booking-submit>Send booking request <i data-lucide="arrow-right"></i></button>
+        <button class="button submit-button" type="submit" data-booking-submit><%= managerReviewRequired ? 'Send for manager review' : 'Send booking request' %> <i data-lucide="arrow-right"></i></button>
         <p class="privacy-note"><i data-lucide="shield-check"></i>Your details are only used to arrange this booking.</p>
       </form>
     </section>

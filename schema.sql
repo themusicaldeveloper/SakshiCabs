@@ -70,7 +70,28 @@ CREATE TABLE IF NOT EXISTS notifications (
   created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS booking_cancellation_requests (
+  id SERIAL PRIMARY KEY,
+  organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  booking_id INTEGER UNIQUE NOT NULL REFERENCES bookings(id) ON DELETE CASCADE,
+  reason TEXT,
+  status VARCHAR(30) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
+  requested_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  resolved_at TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS booking_schedule_conflicts (
+  id SERIAL PRIMARY KEY,
+  organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  booking_id INTEGER UNIQUE NOT NULL REFERENCES bookings(id) ON DELETE CASCADE,
+  conflicting_booking_id INTEGER NOT NULL REFERENCES bookings(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  resolved_at TIMESTAMPTZ
+);
+
 CREATE INDEX IF NOT EXISTS idx_bookings_org_pickup ON bookings(organization_id, pickup_date, pickup_time);
 CREATE INDEX IF NOT EXISTS idx_bookings_driver ON bookings(driver_id, pickup_date);
 CREATE INDEX IF NOT EXISTS idx_users_org_role ON users(organization_id, role);
 CREATE INDEX IF NOT EXISTS idx_notifications_recipient ON notifications(recipient_user_id, is_read, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_cancellation_requests_org_status ON booking_cancellation_requests(organization_id, status);
+CREATE INDEX IF NOT EXISTS idx_schedule_conflicts_org ON booking_schedule_conflicts(organization_id, resolved_at);

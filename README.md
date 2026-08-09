@@ -15,6 +15,7 @@ PostgreSQL.
 - Manual payment and booking status tracking
 - Configurable vehicle scheduling gap and live availability checks
 - In-app notifications for new bookings and driver assignments
+- Customer booking tracking and manager-approved cancellation requests
 
 ## Local setup
 
@@ -59,6 +60,11 @@ trips assigned to them, call the customer, and update the trip status.
 bookings for the same vehicle. It defaults to `6`. Customers see a live check
 after choosing the vehicle, date, and time. A conflicting slot is not submitted
 online and the customer is asked to confirm directly with the manager.
+Confirmed conflicts are shown as already booked. A cancellation request does
+not release the vehicle until the manager approves it.
+Customers can still send an unavailable selection for manager review. The
+request is flagged in dispatch, creates a dedicated admin notification, and can
+be moved to an available vehicle from the consolidated booking update form.
 
 ## Notifications
 

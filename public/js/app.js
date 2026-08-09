@@ -10,12 +10,16 @@ document.addEventListener("DOMContentLoaded", () => {
     const timeInput = bookingForm.querySelector('[name="pickup_time"]');
     const message = bookingForm.querySelector("[data-availability-message]");
     const submit = bookingForm.querySelector("[data-booking-submit]");
+    const managerReview = bookingForm.querySelector("[data-manager-review]");
     let requestNumber = 0;
 
     async function checkAvailability() {
       const vehicle = bookingForm.querySelector('[name="car_id"]:checked');
       if (!vehicle || !dateInput.value || !timeInput.value) {
         message.hidden = true;
+        managerReview.value = "0";
+        submit.innerHTML = 'Send booking request <i data-lucide="arrow-right"></i>';
+        if (window.lucide) window.lucide.createIcons();
         submit.disabled = false;
         return;
       }
@@ -34,14 +38,22 @@ document.addEventListener("DOMContentLoaded", () => {
         message.className = `availability-message ${result.available ? "available" : "unavailable"}`;
         const managerPhone = bookingForm.dataset.managerPhone;
         const managerTel = bookingForm.dataset.managerTel;
+        const escapeHtml = (value) => String(value).replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" })[character]);
+        const alternatives = result.alternatives?.length
+          ? ` Available alternatives: <strong>${result.alternatives.map((vehicle) => escapeHtml(vehicle.name)).join(", ")}</strong>.`
+          : "";
         message.innerHTML = result.available
           ? `<strong>Available</strong><span>${result.message}</span>`
-          : `<strong>Manager confirmation needed</strong><span>${result.message} <a href="tel:${managerTel}">Call ${managerPhone}</a></span>`;
-        submit.disabled = !result.available;
+          : `<strong>${result.state === "booked" ? "Already booked" : "Manager confirmation needed"}</strong><span>${result.message}${alternatives} Choose another car above or <a href="tel:${managerTel}">call ${managerPhone}</a>.</span>`;
+        managerReview.value = result.available ? "0" : "1";
+        submit.innerHTML = result.available ? 'Send booking request <i data-lucide="arrow-right"></i>' : 'Send for manager review <i data-lucide="arrow-right"></i>';
+        if (window.lucide) window.lucide.createIcons();
+        submit.disabled = false;
       } catch (error) {
         if (currentRequest !== requestNumber) return;
         message.className = "availability-message checking";
         message.textContent = "Availability could not be checked. Please try again.";
+        managerReview.value = "0";
         submit.disabled = true;
       }
     }
