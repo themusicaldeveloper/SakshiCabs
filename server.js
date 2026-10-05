@@ -7,7 +7,6 @@ require("dotenv").config();
 const bcrypt = require("bcryptjs");
 const express = require("express");
 const session = require("express-session");
-const PgSession = require("connect-pg-simple")(session);
 const db = require("./db");
 
 const app = express();
@@ -17,14 +16,14 @@ const tenantSlug = process.env.TENANT_SLUG || "cityride";
 const availabilityGapHours = Math.max(0, Number(process.env.AVAILABILITY_GAP_HOURS || 6));
 
 async function initializeDatabase() {
-  await db.query(fs.readFileSync(path.join(__dirname, "schema.sql"), "utf8"));
+  await db.initialize(fs.readFileSync(path.join(__dirname, "schema.sql"), "utf8"));
 
   const organizationResult = await db.query(
     `INSERT INTO organizations (slug, name, phone)
      VALUES ($1, $2, $3)
      ON CONFLICT (slug) DO UPDATE SET name = EXCLUDED.name, phone = EXCLUDED.phone
      RETURNING *`,
-    [tenantSlug, process.env.BUSINESS_NAME || "CityRide Cabs", process.env.BUSINESS_PHONE || "+91 98765 43210"],
+    [tenantSlug, process.env.BUSINESS_NAME || "Sakshi Cabs", process.env.BUSINESS_PHONE || "+91 97222 64700"],
   );
   const organization = organizationResult.rows[0];
 
@@ -93,9 +92,6 @@ const sessionOptions = {
   saveUninitialized: false,
   cookie: { httpOnly: true, sameSite: "lax", secure: isProduction, maxAge: 12 * 60 * 60 * 1000 },
 };
-if (process.env.DB_ADAPTER !== "memory") {
-  sessionOptions.store = new PgSession({ pool: db.pool, createTableIfMissing: true });
-}
 app.use(session(sessionOptions));
 
 let defaultOrganization;
@@ -602,7 +598,7 @@ app.post("/admin/vehicles/:id/toggle", requireUser, requireSuperAdmin, asyncRout
   res.redirect("/admin/vehicles");
 }));
 
-app.get("/health", asyncRoute(async (req, res) => { await db.query("SELECT 1"); res.json({ status: "ok", database: "postgresql" }); }));
+app.get("/health", asyncRoute(async (req, res) => { await db.query("SELECT 1"); res.json({ status: "ok", database: "json" }); }));
 app.use((req, res) => res.status(404).render("message", { title: "Page not found", message: "The page you requested does not exist." }));
 app.use((error, req, res, next) => { console.error(error); res.status(500).render("message", { title: "Something went wrong", message: "Please try again shortly." }); });
 

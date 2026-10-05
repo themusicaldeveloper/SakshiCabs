@@ -1,6 +1,12 @@
-process.env.DB_ADAPTER = "memory";
+const { execFileSync } = require("child_process");
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
+
+process.env.DATA_FILE = path.join(os.tmpdir(), `taxi-booking-smoke-${process.pid}.json`);
 process.env.PORT = process.env.PORT || "3199";
 process.env.SESSION_SECRET = "smoke-test-secret";
+fs.rmSync(process.env.DATA_FILE, { force: true });
 
 const { start } = require("../server");
 
@@ -15,6 +21,9 @@ async function request(path, options = {}, cookie = "") {
 
 async function run() {
   await start();
+  const health = await request("/health");
+  if (health.response.status !== 200 || !health.text.includes('"database":"json"')) throw new Error("JSON storage health check failed");
+
   const home = await request("/");
   if (home.response.status !== 200 || !home.text.includes("Toyota Innova")) throw new Error("Public catalog failed");
 
@@ -133,8 +142,27 @@ async function run() {
   const reopenedAvailability = await request("/api/availability?vehicle_id=1&pickup_date=2026-08-10&pickup_time=13%3A00");
   if (!reopenedAvailability.text.includes('"available":true')) throw new Error("Cancellation did not reopen availability");
 
-  console.log("Smoke test passed: conflict review, alternatives, notifications, combined updates, cancellation, and roles.");
-  process.exit(0);
+  const restoreCheck = `
+    const fs = require("fs");
+    const db = require("./db");
+    (async () => {
+      await db.initialize(fs.readFileSync("schema.sql", "utf8"));
+      const { rows } = await db.query("SELECT b.customer_name, u.username FROM bookings b JOIN users u ON u.id = b.driver_id");
+      if (!rows.some((row) => row.customer_name === "Smoke Customer" && row.username === "driver")) {
+        throw new Error("JSON dataset did not restore booking relationships");
+      }
+    })().catch((error) => { console.error(error); process.exitCode = 1; });
+  `;
+  execFileSync(process.execPath, ["-e", restoreCheck], { env: process.env, stdio: "inherit" });
+
+  console.log("Smoke test passed: booking flows and JSON dataset restore.");
 }
 
-run().catch((error) => { console.error(error); process.exit(1); });
+run().then(() => {
+  fs.rmSync(process.env.DATA_FILE, { force: true });
+  process.exit(0);
+}).catch((error) => {
+  console.error(error);
+  fs.rmSync(process.env.DATA_FILE, { force: true });
+  process.exit(1);
+});
