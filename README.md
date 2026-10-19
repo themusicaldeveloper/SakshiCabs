@@ -102,7 +102,9 @@ managed database before scaling.
 ## GitHub Pages static site
 
 The `site` folder contains a separate static public website. It shows the
-starter fleet and lets customers contact the business by phone or WhatsApp.
+four-car fleet and per-kilometer rates and lets customers contact the business
+by phone or WhatsApp. Update `site/index.html` to change static fleet details
+and rates, then deploy the site again.
 It does not run the Express app: online booking submissions, booking
 management, admin login, and JSON dataset writes are not available on GitHub
 Pages. The Node app can continue to be hosted separately.

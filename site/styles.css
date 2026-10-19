@@ -37,6 +37,8 @@ h1,h2,h3,p{margin-top:0}
 .car-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:24px}
 .car-card{overflow:hidden;border:1px solid var(--line);border-radius:7px;background:#fff}
 .car-image{display:block;width:100%;aspect-ratio:16/9;object-fit:cover;background:#e8ece9}
+.car-image-placeholder{display:flex;width:100%;aspect-ratio:16/9;align-items:center;justify-content:center;background:linear-gradient(135deg,#e7eee9,#cbd9d0);color:#176b4c;font:800 clamp(28px,4vw,44px) Manrope,sans-serif}
+.urbania-placeholder{background:linear-gradient(135deg,#e8eee9,#d5dfda);color:#0f4d38}
 .car-body{padding:24px}
 .category{font-size:12px;font-weight:700}
 .car-title{display:flex;align-items:start;justify-content:space-between;gap:16px;margin-top:5px}
