@@ -45,6 +45,7 @@ h1,h2,h3,p{margin-top:0}
 .car-title h3{margin:0;font:800 clamp(18px,2vw,23px)/1.3 Manrope,sans-serif}
 .car-title>strong{white-space:nowrap;font:800 23px Manrope,sans-serif}
 .car-title small{color:var(--muted);font:500 12px "DM Sans",sans-serif}
+.car-title>.call-rate{max-width:145px;white-space:normal;text-align:right;color:var(--green);font:700 14px/1.35 "DM Sans",sans-serif}
 .car-body>p{min-height:46px;margin:15px 0;color:var(--muted);font-size:14px;line-height:1.6}
 .specs{display:flex;gap:16px;flex-wrap:wrap;padding:14px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line);color:#44504c;font-size:13px}
 .car-body>.button{width:100%;margin-top:18px}
