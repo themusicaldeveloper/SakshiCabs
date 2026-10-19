@@ -26,6 +26,11 @@ async function run() {
 
   const home = await request("/");
   if (home.response.status !== 200 || !home.text.includes("Toyota Innova")) throw new Error("Public catalog failed");
+  for (const [name, rate] of [["Maruti Suzuki Dzire", "12"], ["Maruti Suzuki Ertiga", "15"], ["Toyota Innova Crysta", "20"], ["Force Urbania", "35"]]) {
+    if (!home.text.includes(name) || !home.text.includes(`₹${rate}<small>/km</small>`)) {
+      throw new Error(`Default fleet or rate missing: ${name} at ₹${rate}/km`);
+    }
+  }
 
   const booking = await request("/book", {
     method: "POST",
@@ -71,6 +76,18 @@ async function run() {
   if (vehicleCreate.response.status !== 302) throw new Error("Vehicle creation failed");
   const vehicles = await request("/admin/vehicles", {}, login.cookie);
   if (!vehicles.text.includes("Test Sedan")) throw new Error("Vehicle list failed");
+  const dzireId = vehicles.text.match(/<strong>Maruti Suzuki Dzire<\/strong>[\s\S]*?\/admin\/vehicles\/(\d+)\/rates/)?.[1];
+  if (!dzireId) throw new Error("Vehicle rate editor missing");
+  const rateUpdate = await request(`/admin/vehicles/${dzireId}/rates`, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ rate_per_km: "17.50", day_rate: "3500" }),
+  }, login.cookie);
+  if (rateUpdate.response.status !== 302) throw new Error("Vehicle rate update failed");
+  const updatedVehicles = await request("/admin/vehicles", {}, login.cookie);
+  if (!updatedVehicles.text.includes('value="17.5"') || !updatedVehicles.text.includes('value="3500"') || !updatedVehicles.text.includes("Vehicle rates updated.")) {
+    throw new Error("Updated vehicle rates were not saved");
+  }
 
   await request(`/admin/bookings/${bookingId}/update`, {
     method: "POST",
@@ -143,14 +160,16 @@ async function run() {
   if (!reopenedAvailability.text.includes('"available":true')) throw new Error("Cancellation did not reopen availability");
 
   const restoreCheck = `
-    const fs = require("fs");
+    const { initializeDatabase } = require("./server");
     const db = require("./db");
     (async () => {
-      await db.initialize(fs.readFileSync("schema.sql", "utf8"));
+      await initializeDatabase();
       const { rows } = await db.query("SELECT b.customer_name, u.username FROM bookings b JOIN users u ON u.id = b.driver_id");
       if (!rows.some((row) => row.customer_name === "Smoke Customer" && row.username === "driver")) {
         throw new Error("JSON dataset did not restore booking relationships");
       }
+      const { rows: rates } = await db.query("SELECT rate_per_km FROM vehicles WHERE slug = 'dzire'");
+      if (Number(rates[0]?.rate_per_km) !== 17.5) throw new Error("Updated vehicle rates did not survive dataset restore");
     })().catch((error) => { console.error(error); process.exitCode = 1; });
   `;
   execFileSync(process.execPath, ["-e", restoreCheck], { env: process.env, stdio: "inherit" });

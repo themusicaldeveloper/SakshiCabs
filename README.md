@@ -32,8 +32,10 @@ Copy-Item .env.example .env
 npm run dev
 ```
 
-The schema and starter organization, admin, Ertiga, and Innova are created
-automatically and saved to `data/taxi-booking.json`. Open
+The schema and starter organization, admin, and four-car fleet (Dzire, Ertiga,
+Innova, and Urbania) are created automatically and saved to
+`data/taxi-booking.json`. Their starting per-kilometer rates are ₹12, ₹15, ₹20,
+and ₹35 respectively. Open
 `http://localhost:3000` and use
 `http://localhost:3000/admin` for team login.
 
@@ -50,7 +52,8 @@ after an app restart.
 ## Roles
 
 **Super admin** can see every booking for their organization, register drivers,
-add vehicles, assign trips, update statuses, and record payment.
+add or hide vehicles, update per-kilometer and daily rates, assign trips,
+update statuses, and record payment.
 
 **Driver** can sign in with the account created by the super admin, see only
 trips assigned to them, call the customer, and update the trip status.

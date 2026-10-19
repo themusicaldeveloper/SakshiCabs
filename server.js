@@ -41,16 +41,36 @@ async function initializeDatabase() {
     );
   }
 
-  const vehicles = [
-    ["ertiga", "Maruti Suzuki Ertiga", "Comfort MPV", 6, 3, 16, 3200, "/images/ertiga.png", "A comfortable and efficient choice for family trips, airport transfers, and city travel."],
-    ["innova", "Toyota Innova Crysta", "Premium MPV", 7, 4, 22, 4500, "/images/innova.png", "Extra space and premium comfort for long journeys, business travel, and larger groups."],
-  ];
-  for (const vehicle of vehicles) {
+  const fleetMigration = "default-fleet-and-rates-v1";
+  const { rows: appliedMigrations } = await db.query(
+    "SELECT id FROM organization_migrations WHERE organization_id = $1 AND migration_key = $2",
+    [organization.id, fleetMigration],
+  );
+  if (!appliedMigrations.length) {
+    const vehicles = [
+      ["ertiga", "Maruti Suzuki Ertiga", "Comfort MPV", 6, 3, 15, 3200, "/images/ertiga.png", "A comfortable and efficient choice for family trips, airport transfers, and city travel."],
+      ["innova", "Toyota Innova Crysta", "Premium MPV", 7, 4, 20, 4500, "/images/innova.png", "Extra space and premium comfort for long journeys, business travel, and larger groups."],
+      ["dzire", "Maruti Suzuki Dzire", "Compact Sedan", 4, 2, 12, 2400, "/images/Scorpio.webp", "A comfortable and economical sedan for city trips and airport transfers."],
+      ["urbania", "Force Urbania", "Luxury Van", 12, 8, 35, 7000, "/images/innova.png", "Spacious group travel with room for passengers and luggage."],
+    ];
+    for (const vehicle of vehicles) {
+      await db.query(
+        `INSERT INTO vehicles (organization_id, slug, name, category, seats, bags, rate_per_km, day_rate, image_url, description)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+         ON CONFLICT (organization_id, slug) DO NOTHING`,
+        [organization.id, ...vehicle],
+      );
+    }
+    for (const [slug, rate] of [["ertiga", 15], ["innova", 20], ["dzire", 12], ["urbania", 35]]) {
+      await db.query(
+        "UPDATE vehicles SET rate_per_km = $1 WHERE organization_id = $2 AND slug = $3",
+        [rate, organization.id, slug],
+      );
+    }
     await db.query(
-      `INSERT INTO vehicles (organization_id, slug, name, category, seats, bags, rate_per_km, day_rate, image_url, description)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-       ON CONFLICT (organization_id, slug) DO NOTHING`,
-      [organization.id, ...vehicle],
+      `INSERT INTO organization_migrations (organization_id, migration_key)
+       VALUES ($1, $2)`,
+      [organization.id, fleetMigration],
     );
   }
 
@@ -173,7 +193,7 @@ async function notifyUsers(client, organizationId, userIds, bookingId, type, tit
 }
 
 app.get("/", asyncRoute(async (req, res) => {
-  const { rows: cars } = await db.query("SELECT * FROM vehicles WHERE organization_id = $1 AND is_active = TRUE ORDER BY id", [defaultOrganization.id]);
+  const { rows: cars } = await db.query("SELECT * FROM vehicles WHERE organization_id = $1 AND is_active = TRUE ORDER BY name, id", [defaultOrganization.id]);
   res.render("home", { cars, title: "Reliable taxis for every journey" });
 }));
 
@@ -184,7 +204,7 @@ app.get("/cars/:slug", asyncRoute(async (req, res) => {
 }));
 
 app.get("/book", asyncRoute(async (req, res) => {
-  const { rows: cars } = await db.query("SELECT * FROM vehicles WHERE organization_id = $1 AND is_active = TRUE ORDER BY id", [defaultOrganization.id]);
+  const { rows: cars } = await db.query("SELECT * FROM vehicles WHERE organization_id = $1 AND is_active = TRUE ORDER BY name, id", [defaultOrganization.id]);
   res.render("book", { cars, selectedCarId: Number(req.query.car || cars[0]?.id), error: null, values: {}, managerReviewRequired: false, title: "Request a booking" });
 }));
 
@@ -222,7 +242,7 @@ app.get("/api/availability", asyncRoute(async (req, res) => {
 
 app.post("/book", asyncRoute(async (req, res) => {
   const values = req.body;
-  const { rows: cars } = await db.query("SELECT * FROM vehicles WHERE organization_id = $1 AND is_active = TRUE ORDER BY id", [defaultOrganization.id]);
+  const { rows: cars } = await db.query("SELECT * FROM vehicles WHERE organization_id = $1 AND is_active = TRUE ORDER BY name, id", [defaultOrganization.id]);
   const car = cars.find((item) => Number(item.id) === Number(values.car_id));
   const required = ["customer_name", "phone", "pickup_location", "drop_location", "pickup_date", "pickup_time", "trip_type"];
   if (!car || required.some((key) => !String(values[key] || "").trim())) {
@@ -578,7 +598,7 @@ app.post("/admin/drivers/:id/toggle", requireUser, requireSuperAdmin, asyncRoute
 }));
 
 app.get("/admin/vehicles", requireUser, requireSuperAdmin, asyncRoute(async (req, res) => {
-  const { rows: vehicles } = await db.query("SELECT * FROM vehicles WHERE organization_id = $1 ORDER BY id", [req.session.user.organizationId]);
+  const { rows: vehicles } = await db.query("SELECT * FROM vehicles WHERE organization_id = $1 ORDER BY name, id", [req.session.user.organizationId]);
   res.render("vehicles", { vehicles, title: "Vehicles" });
 }));
 
@@ -590,6 +610,24 @@ app.post("/admin/vehicles", requireUser, requireSuperAdmin, asyncRoute(async (re
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
     [req.session.user.organizationId, slug, v.name.trim(), String(v.registration_number || "").trim(), v.category.trim(), Number(v.seats), Number(v.bags || 0), Number(v.rate_per_km), Number(v.day_rate), String(v.image_url || "/images/ertiga.png").trim(), String(v.description || "Comfortable taxi available for hire.").trim()],
   );
+  res.redirect("/admin/vehicles");
+}));
+
+app.post("/admin/vehicles/:id/rates", requireUser, requireSuperAdmin, asyncRoute(async (req, res) => {
+  const validRate = (value) => /^\d+(?:\.\d{1,2})?$/.test(String(value || ""));
+  const { rate_per_km: ratePerKm, day_rate: dayRate } = req.body;
+  if (!validRate(ratePerKm) || !validRate(dayRate)) {
+    return res.status(400).render("message", { title: "Invalid vehicle rates", message: "Enter non-negative rates with up to two decimal places." });
+  }
+  const { rowCount } = await db.query(
+    `UPDATE vehicles SET rate_per_km = $1, day_rate = $2
+     WHERE id = $3 AND organization_id = $4`,
+    [Number(ratePerKm), Number(dayRate), req.params.id, req.session.user.organizationId],
+  );
+  if (!rowCount) {
+    return res.status(404).render("message", { title: "Vehicle not found", message: "This vehicle is not available to your account." });
+  }
+  req.session.notice = "Vehicle rates updated.";
   res.redirect("/admin/vehicles");
 }));
 

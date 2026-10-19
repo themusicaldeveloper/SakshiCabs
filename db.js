@@ -4,6 +4,7 @@ const { newDb } = require("pg-mem");
 
 const tableNames = [
   "organizations",
+  "organization_migrations",
   "users",
   "vehicles",
   "bookings",
@@ -13,6 +14,7 @@ const tableNames = [
 ];
 
 const foreignKeys = {
+  organization_migrations: { organization_id: "organizations" },
   users: { organization_id: "organizations" },
   vehicles: { organization_id: "organizations" },
   bookings: { organization_id: "organizations", vehicle_id: "vehicles", driver_id: "users" },
@@ -43,6 +45,9 @@ async function readSnapshot() {
       throw new Error(`Unsupported or invalid JSON dataset in ${dataFile}.`);
     }
     for (const tableName of tableNames) {
+      if (tableName === "organization_migrations" && snapshot.tables[tableName] === undefined) {
+        snapshot.tables[tableName] = [];
+      }
       if (!Array.isArray(snapshot.tables[tableName])) {
         throw new Error(`Invalid JSON dataset in ${dataFile}: "${tableName}" must be an array.`);
       }
