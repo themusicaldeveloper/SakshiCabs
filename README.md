@@ -113,9 +113,13 @@ To publish it, push this repository to GitHub on the `main` branch, then in
 repository **Settings → Pages**, select **GitHub Actions** as the build and
 deployment source. The workflow deploys the `site` folder when it changes, or
 can be started manually from the Actions tab.
-When publishing directly from the repository's `main` branch instead, the
-root `index.html` redirects visitors to `/site/` so the static website opens
-as the homepage rather than the repository instructions.
+GitHub Pages publishes the contents of that folder at the domain root, so the
+homepage URL is `https://sakshicabs.in/`, not `/site/`. If Pages is configured
+to publish from the repository root instead, the root `index.html` provides
+the same homepage and loads its styles and images from `site/`.
+The homepage declares `https://sakshicabs.in/` as its canonical URL for search
+engines. Keep the root `index.html` and `site/index.html` content in sync when
+updating the homepage if using branch-based Pages publishing.
 
 The static site displays the business contact number configured in
 `site/index.html`. The static site is public, so only put public business
